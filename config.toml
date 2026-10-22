@@ -1,0 +1,30 @@
+# ue-perf-sleuth 配置
+
+[llm]
+model = "qwen2.5:7b"
+base_url = "http://localhost:11434"
+
+[index]
+# SQLite 符号索引路径（老版 indexer 无 parent_class 列，bridge 层已自动降级）
+db_path = "g:/tools/SourceCode_db/symbols_20260702_1913_e-Source_g-Source.db"
+
+[roots]
+# ripgrep 搜索的源码根目录
+paths = [
+  "G:/theozhu_THEOZHU-PC1_4001/UnrealEngine/Engine/Source",
+  "G:/theozhu_THEOZHU-PC1_4001/RaidGame/Source",
+  "G:/theozhu_THEOZHU-PC1_4001/RaidGame/Plugins",
+]
+
+[mcp]
+# UnrealMCP TCP 服务（UE 编辑器内的插件监听端口）
+# 端口在 UnrealMCP/EpicUnrealMCPBridge.cpp 的 MCP_SERVER_PORT 定义 = 55557
+# UE 编辑器没打开时 AssetSage 会优雅降级
+host = "127.0.0.1"
+port = 55557
+
+[limits]
+planner_max_steps = 6
+codesage_max_steps = 8
+assetsage_max_steps = 6
+max_tool_output_chars = 4000
