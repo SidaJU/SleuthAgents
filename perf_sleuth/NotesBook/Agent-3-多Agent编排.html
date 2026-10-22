@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent-3：多 Agent 编排</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<div class="wrap">
+<div class="nav"><a href="index.html">目录</a><a href="Agent-2-ToolCalling.html">上一篇：Tool Calling</a><a href="Agent-4-UnrealMCP.html">下一篇：UnrealMCP</a></div>
+<h1>Agent-3：多 Agent 编排 —— Planner / State / Handoff</h1>
+<div class="sub">对应代码：<code>graph.py</code>、<code>state.py</code>、<code>agents/planner.py</code></div>
+
+<div class="oneline">多 Agent = 一个共享 <code>State</code> + 一个 <code>route</code> 指针 + 一个 while 循环轮流让谁上场。</div>
+
+<h2>1. 为什么要拆成多个 Agent</h2>
+<table>
+<tr><th>Agent</th><th>工具集</th><th>数据源</th><th>为什么分开</th></tr>
+<tr><td>Planner</td><td>handoff / finalize</td><td>无</td><td>只做判断和汇总，prompt 短而稳</td></tr>
+<tr><td>CodeSage</td><td>4 个源码工具</td><td>SQLite + ripgrep</td><td>静态知识，永远可用</td></tr>
+<tr><td>AssetSage</td><td>6 个 MCP 工具</td><td>UE 编辑器活数据</td><td>依赖编辑器，可能不可用</td></tr>
+</table>
+<p>工具少，LLM 选错概率就低；一个 Agent 一类数据源，故障也被隔离在自己那一层。</p>
+
+<h2>2. 路由状态机（核心图）</h2>
+<div class="diagram">
+<svg width="780" height="300" viewBox="0 0 780 300">
+  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="310" y="110" width="160" height="60" rx="10"/>
+  <text x="390" y="136" text-anchor="middle">Planner</text><text x="390" y="156" text-anchor="middle" class="dim">route = "planner"</text>
+  <rect class="box" x="40" y="20" width="170" height="60" rx="10"/>
+  <text x="125" y="46" text-anchor="middle">CodeSage</text><text x="125" y="66" text-anchor="middle" class="dim">route = "codesage"</text>
+  <rect class="boxg" x="40" y="220" width="170" height="60" rx="10"/>
+  <text x="125" y="246" text-anchor="middle">AssetSage</text><text x="125" y="266" text-anchor="middle" class="dim">route = "assetsage"</text>
+  <rect class="boxo" x="580" y="110" width="160" height="60" rx="10"/>
+  <text x="660" y="136" text-anchor="middle">done</text><text x="660" y="156" text-anchor="middle" class="dim">final_answer</text>
+  <path class="ln" d="M330,110 L210,60" marker-end="url(#a3)"/>
+  <path class="ln" d="M330,170 L210,240" marker-end="url(#a3)"/>
+  <path class="lnd" d="M170,80 L170,100 L320,130" marker-end="url(#a3)"/>
+  <path class="lnd" d="M170,220 L170,200 L320,155" marker-end="url(#a3)"/>
+  <path class="ln" d="M470,140 L578,140" marker-end="url(#a3)"/>
+  <text x="250" y="72" class="dim" transform="rotate(-28 250 72)">handoff_codesage</text>
+  <text x="235" y="222" class="dim" transform="rotate(28 235 222)">handoff_assetsage</text>
+  <text x="525" y="132" text-anchor="middle" class="dim">finalize</text>
+  <text x="250" y="130" class="dim">带 findings 返回</text>
+  <path class="lnd" d="M390,110 C390,60 440,60 440,108" marker-end="url(#a3)"/>
+  <text x="415" y="52" text-anchor="middle" class="dim">可再次 handoff（多轮）</text>
+</svg>
+<div class="cap">图 1：实线 = Planner 决定下一步，虚线 = 子 Agent 跑完把 route 改回 planner</div>
+</div>
+
+<h2>3. State：Agent 之间的「共享白板」</h2>
+<div class="diagram">
+<svg width="700" height="230" viewBox="0 0 700 230">
+  <rect class="box" x="20" y="10" width="660" height="210" rx="10"/>
+  <text x="350" y="34" text-anchor="middle">State（一次会话一个）</text>
+  <rect class="boxo" x="40" y="50" width="190" height="44" rx="6"/><text x="135" y="77" text-anchor="middle">route（谁上场）</text>
+  <rect class="boxo" x="255" y="50" width="190" height="44" rx="6"/><text x="350" y="77" text-anchor="middle">current_handoff（交接单）</text>
+  <rect class="boxo" x="470" y="50" width="190" height="44" rx="6"/><text x="565" y="77" text-anchor="middle">forced_agent（强制路由）</text>
+  <rect class="boxg" x="40" y="110" width="190" height="44" rx="6"/><text x="135" y="137" text-anchor="middle">findings（子 Agent 结论）</text>
+  <rect class="boxg" x="255" y="110" width="190" height="44" rx="6"/><text x="350" y="137" text-anchor="middle">tool_calls（原始证据）</text>
+  <rect class="boxg" x="470" y="110" width="190" height="44" rx="6"/><text x="565" y="137" text-anchor="middle">messages（全程日志）</text>
+  <rect class="boxr" x="40" y="168" width="290" height="40" rx="6"/><text x="185" y="193" text-anchor="middle">error（异常原因）</text>
+  <rect class="boxp" x="370" y="168" width="290" height="40" rx="6"/><text x="515" y="193" text-anchor="middle">final_answer（最终答案）</text>
+</svg>
+<div class="cap">图 2：橙色 = 控制流字段，绿色 = 证据字段，Planner 汇总时同时读 findings 和 tool_calls</div>
+</div>
+<div class="note good"><b>设计点</b>：Planner 汇总时不光看子 Agent 的 <code>summary</code>，还回看 <code>tool_calls</code> 里的原始证据，这样子 Agent 总结错了也能纠正。</div>
+
+<h2>4. 两条路由：规则优先，LLM 兜底</h2>
+<ol>
+<li><b>规则强制路由</b>：<code>detect_forced_agent</code> 匹配「查资产 / 查代码 / nanite / grep…」关键词，命中直接 handoff，<b>不花 LLM 调用</b>。资产关键词优先（更具体）。</li>
+<li><b>LLM 路由</b>：规则没命中，才让 Planner 的 LLM 在 handoff_codesage / handoff_assetsage / finalize 里选；拿不准先派 CodeSage（源码永远可查）。</li>
+</ol>
+
+<h2>5. 一次混合问题怎么走</h2>
+<div class="diagram">
+<svg width="800" height="130" viewBox="0 0 800 130">
+  <defs><marker id="b3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="10" y="40" width="130" height="50" rx="8"/><text x="75" y="62" text-anchor="middle">turn 1 Planner</text><text x="75" y="80" text-anchor="middle" class="dim">选 CodeSage</text>
+  <rect class="box" x="170" y="40" width="130" height="50" rx="8"/><text x="235" y="62" text-anchor="middle">turn 2 CodeSage</text><text x="235" y="80" text-anchor="middle" class="dim">查到相关函数</text>
+  <rect class="boxp" x="330" y="40" width="130" height="50" rx="8"/><text x="395" y="62" text-anchor="middle">turn 3 Planner</text><text x="395" y="80" text-anchor="middle" class="dim">再派 AssetSage</text>
+  <rect class="boxg" x="490" y="40" width="130" height="50" rx="8"/><text x="555" y="62" text-anchor="middle">turn 4 AssetSage</text><text x="555" y="80" text-anchor="middle" class="dim">验证资产设置</text>
+  <rect class="boxp" x="650" y="40" width="130" height="50" rx="8"/><text x="715" y="62" text-anchor="middle">turn 5 Planner</text><text x="715" y="80" text-anchor="middle" class="dim">汇总 finalize</text>
+  <path class="ln" d="M140,65 L168,65" marker-end="url(#b3)"/><path class="ln" d="M300,65 L328,65" marker-end="url(#b3)"/>
+  <path class="ln" d="M460,65 L488,65" marker-end="url(#b3)"/><path class="ln" d="M620,65 L648,65" marker-end="url(#b3)"/>
+  <text x="400" y="115" text-anchor="middle" class="dim">总轮数受 planner_max_steps = 6 限制</text>
+</svg>
+<div class="cap">图 3：先看代码线索，再用编辑器数据验证，最后汇总</div>
+</div>
+
+<h2>6. 你该记住的 3 件事</h2>
+<ol>
+<li><code>State.route</code> 是外层循环的「行动指针」，子 Agent 只改 route 和写 findings，不直接互相调用。</li>
+<li>Agent 要<b>少工具、单数据源</b>，故障隔离、prompt 简单。</li>
+<li>规则路由省 LLM 调用且可控，LLM 路由负责模糊问题。</li>
+</ol>
+
+<div class="next">下一篇：Agent-4 UnrealMCP —— Agent 怎么真正「碰到」UE 编辑器。</div>
+</div>
+</body>
+</html>

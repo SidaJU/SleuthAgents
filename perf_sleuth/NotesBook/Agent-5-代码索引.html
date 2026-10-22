@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent-5：代码索引 —— SQLite + ripgrep</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<div class="wrap">
+<div class="nav"><a href="index.html">目录</a><a href="Agent-4-UnrealMCP.html">上一篇：UnrealMCP</a><a href="Agent-6-可靠性护栏.html">下一篇：可靠性护栏</a></div>
+<h1>Agent-5：代码索引 —— SQLite + ripgrep 分工</h1>
+<div class="sub">对应代码：<code>shared/explorer_bridge.py</code>、<code>agents/codesage.py</code></div>
+
+<div class="oneline">索引回答「它在哪定义」，ripgrep 回答「谁在用它」，read_file 回答「具体怎么写」。三者组合，让 LLM 不用把整个 UE 源码塞进上下文。</div>
+
+<h2>1. 为什么不能直接让 LLM 读源码</h2>
+<ul>
+<li>UE 源码是百万行级，远超上下文窗口（本项目 <code>num_ctx</code> 才 8192）。</li>
+<li>所以 Agent 必须<b>按需检索</b>：先定位 → 再读一小段 → 再追下去。</li>
+</ul>
+
+<h2>2. 四个工具各管一段</h2>
+<div class="diagram">
+<svg width="800" height="260" viewBox="0 0 800 260">
+  <defs><marker id="a5" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="320" y="10" width="160" height="40" rx="8"/><text x="400" y="35" text-anchor="middle">CodeSage（ReAct）</text>
+  <rect class="box" x="10" y="100" width="170" height="70" rx="8"/><text x="95" y="124" text-anchor="middle">lookup_symbol</text><text x="95" y="144" text-anchor="middle" class="dim">SQLite：定义在哪</text><text x="95" y="160" text-anchor="middle" class="dim">文件 + 行号</text>
+  <rect class="box" x="210" y="100" width="170" height="70" rx="8"/><text x="295" y="124" text-anchor="middle">find_callers</text><text x="295" y="144" text-anchor="middle" class="dim">ripgrep：谁在调用</text><text x="295" y="160" text-anchor="middle" class="dim">文件 + 行号 + 片段</text>
+  <rect class="box" x="410" y="100" width="170" height="70" rx="8"/><text x="495" y="124" text-anchor="middle">class_hierarchy</text><text x="495" y="144" text-anchor="middle" class="dim">SQLite：向上追父类</text><text x="495" y="160" text-anchor="middle" class="dim">最多 10 层</text>
+  <rect class="box" x="610" y="100" width="170" height="70" rx="8"/><text x="695" y="124" text-anchor="middle">read_file</text><text x="695" y="144" text-anchor="middle" class="dim">前后各取一窗口</text><text x="695" y="160" text-anchor="middle" class="dim">只读需要的那段</text>
+  <path class="ln" d="M370,50 L110,98" marker-end="url(#a5)"/><path class="ln" d="M390,50 L295,98" marker-end="url(#a5)"/>
+  <path class="ln" d="M410,50 L495,98" marker-end="url(#a5)"/><path class="ln" d="M430,50 L690,98" marker-end="url(#a5)"/>
+  <rect class="boxg" x="10" y="210" width="370" height="40" rx="8"/><text x="195" y="235" text-anchor="middle">SQLite 符号库：197 万符号（预先建好）</text>
+  <rect class="boxg" x="410" y="210" width="370" height="40" rx="8"/><text x="595" y="235" text-anchor="middle">源码目录：Engine/Source + 项目 Source/Plugins</text>
+  <path class="lnd" d="M95,170 L95,208" marker-end="url(#a5)"/><path class="lnd" d="M295,170 L500,208" marker-end="url(#a5)"/>
+  <path class="lnd" d="M495,170 L250,208" marker-end="url(#a5)"/><path class="lnd" d="M695,170 L650,208" marker-end="url(#a5)"/>
+</svg>
+<div class="cap">图 1：四个工具对应「定义 / 调用 / 继承 / 具体代码」四类问题</div>
+</div>
+
+<h2>3. 典型追踪路径</h2>
+<div class="diagram">
+<svg width="800" height="110" viewBox="0 0 800 110">
+  <defs><marker id="b5" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="box" x="10" y="30" width="170" height="50" rx="8"/><text x="95" y="52" text-anchor="middle">① lookup_symbol</text><text x="95" y="70" text-anchor="middle" class="dim">拿到文件路径</text>
+  <rect class="box" x="220" y="30" width="170" height="50" rx="8"/><text x="305" y="52" text-anchor="middle">② read_file</text><text x="305" y="70" text-anchor="middle" class="dim">看实现</text>
+  <rect class="box" x="430" y="30" width="170" height="50" rx="8"/><text x="515" y="52" text-anchor="middle">③ find_callers</text><text x="515" y="70" text-anchor="middle" class="dim">看谁触发它</text>
+  <rect class="boxg" x="640" y="30" width="150" height="50" rx="8"/><text x="715" y="52" text-anchor="middle">④ finalize</text><text x="715" y="70" text-anchor="middle" class="dim">带文件:行号</text>
+  <path class="ln" d="M180,55 L218,55" marker-end="url(#b5)"/><path class="ln" d="M390,55 L428,55" marker-end="url(#b5)"/><path class="ln" d="M600,55 L638,55" marker-end="url(#b5)"/>
+</svg>
+<div class="cap">图 2：每一步的输入都来自上一步的输出，路径不许 LLM 瞎编（prompt 规则 4）</div>
+</div>
+
+<h2>4. 工程细节（面试加分点）</h2>
+<table>
+<tr><th>问题</th><th>处理</th><th>位置</th></tr>
+<tr><td>老索引库没有 <code>parent_class</code> 列</td><td>用 <code>PRAGMA table_info</code> 检测列，缺了就降级并给出说明</td><td><code>_cols()</code></td></tr>
+<tr><td>名称精确查不到</td><td>自动降级成 <code>LIKE %name%</code></td><td><code>lookup_symbol</code></td></tr>
+<tr><td>继承链有环或模板</td><td><code>seen</code> 集合防环，<code>split("::")/split("&lt;")</code> 清洗名字</td><td><code>class_hierarchy</code></td></tr>
+<tr><td>rg 不在 PATH</td><td>启动时自动注入候选目录</td><td>文件头部</td></tr>
+<tr><td>结果太长</td><td>最多 15 条符号 / 30 条调用点，整体截断 3500 字符</td><td><code>_exec_tool</code></td></tr>
+</table>
+
+<h2>5. 你该记住的 3 件事</h2>
+<ol>
+<li>大代码库 = <b>先建索引再检索</b>，不要指望上下文装得下。</li>
+<li>索引（精确定位）+ ripgrep（全文关系）+ 窗口读取（细节），各管一段。</li>
+<li>对数据 schema 做<b>自适应与降级</b>，工具才能在不同版本的库上都能跑。</li>
+</ol>
+
+<div class="next">下一篇：Agent-6 可靠性护栏 —— 小模型为什么也能稳定跑完。</div>
+</div>
+</body>
+</html>

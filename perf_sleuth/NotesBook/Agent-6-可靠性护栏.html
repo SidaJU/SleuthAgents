@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent-6：可靠性护栏</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<div class="wrap">
+<div class="nav"><a href="index.html">目录</a><a href="Agent-5-代码索引.html">上一篇：代码索引</a></div>
+<h1>Agent-6：可靠性护栏 —— 让 7B 小模型也能稳定跑完</h1>
+<div class="sub">对应代码：<code>llm.py</code>、<code>codesage.py</code>、<code>assetsage.py</code>、<code>graph.py</code>、<code>tests/test_smoke.py</code></div>
+
+<div class="oneline">LLM 一定会出错：输出坏 JSON、重复调用、死循环、依赖挂掉。可靠性 = 每一层都有兜底，错误变成可处理的数据，而不是崩溃。</div>
+
+<h2>1. 护栏分层（从内到外）</h2>
+<div class="diagram">
+<svg width="760" height="330" viewBox="0 0 760 330">
+  <rect class="boxo" x="10" y="10" width="740" height="310" rx="14"/>
+  <text x="380" y="34" text-anchor="middle">④ 编排层：planner_max_steps = 6，超限由 graph 写兜底答案</text>
+  <rect class="boxp" x="40" y="50" width="680" height="250" rx="12"/>
+  <text x="380" y="74" text-anchor="middle">③ Agent 层：max_steps（Code 8 / Asset 6）+ 去重 + 连续错误熔断 + _fallback_summary</text>
+  <rect class="box" x="70" y="90" width="620" height="190" rx="10"/>
+  <text x="380" y="114" text-anchor="middle">② 工具层：白名单 + 参数矫正 + 输出截断 + 异常转字符串</text>
+  <rect class="boxg" x="100" y="130" width="560" height="130" rx="10"/>
+  <text x="380" y="154" text-anchor="middle">① 模型层：format=json + T=0 + JSON 修复重试</text>
+  <rect class="boxr" x="200" y="174" width="360" height="66" rx="10"/>
+  <text x="380" y="200" text-anchor="middle">LLM 调用（会出错的那一部分）</text>
+  <text x="380" y="220" text-anchor="middle" class="dim">坏 JSON / 乱选工具 / 重复 / 不收敛</text>
+</svg>
+<div class="cap">图 1：越靠外，兜住的故障越大</div>
+</div>
+
+<h2>2. 故障 → 护栏 对照表</h2>
+<table>
+<tr><th>故障</th><th>护栏</th><th>位置</th></tr>
+<tr><td>输出不是合法 JSON</td><td>提取首尾 <code>{}</code>，再不行追加提示重试一次</td><td><code>llm.chat_json</code></td></tr>
+<tr><td>LLM 编出不存在的工具</td><td><code>_TOOL_MAP</code> 白名单，返回「未知工具」</td><td><code>_exec_tool</code></td></tr>
+<tr><td>参数名写错</td><td><code>_normalize_args</code> 自动改写</td><td><code>assetsage.py</code></td></tr>
+<tr><td>同一调用反复发</td><td>签名去重，塞警告 observation，不执行</td><td><code>seen_calls</code></td></tr>
+<tr><td>一直不 finalize</td><td><code>max_steps</code> 到顶，用已有证据拼摘要</td><td><code>_fallback_summary</code></td></tr>
+<tr><td>UE 编辑器没开</td><td>ping 预警 + 连续 2 次 error 熔断</td><td><code>consecutive_errors</code></td></tr>
+<tr><td>工具输出太长</td><td>截断到 3500 字符，保留原长度提示</td><td><code>_fmt</code></td></tr>
+<tr><td>LLM 汇总失败</td><td>直接展示子 Agent 摘要 + 原始证据</td><td><code>planner._summarize</code></td></tr>
+<tr><td>Planner 一直转圈</td><td>外层 <code>for turn</code> 有上限，写「编排层兜底」答案</td><td><code>graph.run</code></td></tr>
+</table>
+
+<h2>3. 去重 + 熔断的执行流程</h2>
+<div class="diagram">
+<svg width="800" height="270" viewBox="0 0 800 270">
+  <defs><marker id="a6" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="box" x="10" y="100" width="130" height="50" rx="8"/><text x="75" y="130" text-anchor="middle">LLM 给出工具</text>
+  <rect class="boxo" x="180" y="100" width="150" height="50" rx="8"/><text x="255" y="122" text-anchor="middle">签名见过？</text><text x="255" y="140" text-anchor="middle" class="dim">tool + args</text>
+  <rect class="boxr" x="180" y="190" width="150" height="50" rx="8"/><text x="255" y="212" text-anchor="middle">拒绝执行</text><text x="255" y="230" text-anchor="middle" class="dim">写警告 observation</text>
+  <rect class="boxg" x="370" y="100" width="130" height="50" rx="8"/><text x="435" y="130" text-anchor="middle">执行工具</text>
+  <rect class="boxo" x="540" y="100" width="150" height="50" rx="8"/><text x="615" y="122" text-anchor="middle">返回 error？</text><text x="615" y="140" text-anchor="middle" class="dim">连续计数</text>
+  <rect class="boxr" x="540" y="190" width="150" height="50" rx="8"/><text x="615" y="212" text-anchor="middle">≥ 2 次 → 熔断</text><text x="615" y="230" text-anchor="middle" class="dim">fallback 收尾</text>
+  <rect class="boxg" x="540" y="10" width="150" height="50" rx="8"/><text x="615" y="32" text-anchor="middle">写入 history</text><text x="615" y="50" text-anchor="middle" class="dim">进入下一轮</text>
+  <path class="ln" d="M140,125 L178,125" marker-end="url(#a6)"/>
+  <path class="ln" d="M330,125 L368,125" marker-end="url(#a6)"/><text x="349" y="118" class="dim">否</text>
+  <path class="ln" d="M255,150 L255,188" marker-end="url(#a6)"/><text x="262" y="172" class="dim">是</text>
+  <path class="ln" d="M500,125 L538,125" marker-end="url(#a6)"/>
+  <path class="ln" d="M615,150 L615,188" marker-end="url(#a6)"/><text x="622" y="172" class="dim">是</text>
+  <path class="ln" d="M615,100 L615,62" marker-end="url(#a6)"/><text x="622" y="84" class="dim">否</text>
+</svg>
+<div class="cap">图 2：去重是「软拒绝」（让 LLM 换方向），熔断是「硬停止」</div>
+</div>
+
+<h2>4. 可复现与可测试</h2>
+<ul>
+<li><b>可复现</b>：temperature = 0；每次调用写入 <code>state.tool_calls</code>；<code>--dump-trace</code> 导出完整轨迹。</li>
+<li><b>可测试</b>：<code>tests/test_smoke.py</code> 不依赖真实 LLM，用 mock 验证强制路由、State 流转、MCP 不可达时的降级。</li>
+</ul>
+<div class="diagram">
+<svg width="700" height="110" viewBox="0 0 700 110">
+  <defs><marker id="b6" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="10" y="30" width="140" height="50" rx="8"/><text x="80" y="60" text-anchor="middle">mock LLM</text>
+  <rect class="box" x="200" y="30" width="140" height="50" rx="8"/><text x="270" y="52" text-anchor="middle">真实 Planner /</text><text x="270" y="70" text-anchor="middle">State 流转逻辑</text>
+  <rect class="boxg" x="390" y="30" width="140" height="50" rx="8"/><text x="460" y="60" text-anchor="middle">断言 route</text>
+  <rect class="boxo" x="570" y="30" width="120" height="50" rx="8"/><text x="630" y="52" text-anchor="middle">13/13</text><text x="630" y="70" text-anchor="middle" class="dim">冒烟通过</text>
+  <path class="ln" d="M150,55 L198,55" marker-end="url(#b6)"/><path class="ln" d="M340,55 L388,55" marker-end="url(#b6)"/><path class="ln" d="M530,55 L568,55" marker-end="url(#b6)"/>
+</svg>
+<div class="cap">图 3：把「不稳定的 LLM」替换成 mock，单独验证确定性逻辑</div>
+</div>
+
+<h2>5. 你该记住的 3 件事</h2>
+<ol>
+<li>每个循环都要有<b>上限</b>，每个失败都要有<b>兜底输出</b>（不丢已有证据）。</li>
+<li>错误当作<b>数据</b>回灌给 LLM，而不是抛异常中断。</li>
+<li>把确定性逻辑和 LLM 分开，才能写<b>不依赖模型</b>的测试。</li>
+</ol>
+
+<div class="next">系列完。回到 <a href="index.html" style="color:#4da3ff">目录</a>。</div>
+</div>
+</body>
+</html>

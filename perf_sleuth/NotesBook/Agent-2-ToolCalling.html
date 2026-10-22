@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent-2：Tool Calling（工具调用）</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<div class="wrap">
+<div class="nav"><a href="index.html">目录</a><a href="Agent-1-ReAct.md">上一篇：ReAct</a><a href="Agent-3-多Agent编排.html">下一篇：多 Agent 编排</a></div>
+<h1>Agent-2：Tool Calling —— LLM 怎么「准确」调函数</h1>
+<div class="sub">对应代码：<code>codesage.py</code> / <code>assetsage.py</code> 的 <code>TOOLS_DOC</code>、<code>_exec_tool</code>；<code>llm.py</code> 的 <code>chat_json</code></div>
+
+<div class="oneline">LLM 不会真的「调用」函数，它只会输出一段 JSON；真正执行函数的是你的 Python 代码。</div>
+
+<h2>1. 整条链路（先看图）</h2>
+<div class="diagram">
+<svg width="820" height="200" viewBox="0 0 820 200">
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="10" y="60" width="130" height="70" rx="8"/>
+  <text x="75" y="88" text-anchor="middle">SYSTEM_PROMPT</text>
+  <text x="75" y="108" text-anchor="middle" class="dim">含 TOOLS_DOC 工具说明书</text>
+  <rect class="box" x="180" y="60" width="120" height="70" rx="8"/>
+  <text x="240" y="88" text-anchor="middle">LLM</text>
+  <text x="240" y="108" text-anchor="middle" class="dim">format=json, T=0</text>
+  <rect class="boxo" x="340" y="60" width="130" height="70" rx="8"/>
+  <text x="405" y="88" text-anchor="middle">_extract_json</text>
+  <text x="405" y="108" text-anchor="middle" class="dim">解析 + 修复重试</text>
+  <rect class="boxg" x="510" y="60" width="140" height="70" rx="8"/>
+  <text x="580" y="88" text-anchor="middle">_exec_tool</text>
+  <text x="580" y="108" text-anchor="middle" class="dim">白名单 + 参数矫正</text>
+  <rect class="box" x="690" y="60" width="120" height="70" rx="8"/>
+  <text x="750" y="88" text-anchor="middle">真实函数</text>
+  <text x="750" y="108" text-anchor="middle" class="dim">SQLite / MCP</text>
+  <path class="ln" d="M140,95 L178,95" marker-end="url(#a2)"/>
+  <path class="ln" d="M300,95 L338,95" marker-end="url(#a2)"/>
+  <path class="ln" d="M470,95 L508,95" marker-end="url(#a2)"/>
+  <path class="ln" d="M650,95 L688,95" marker-end="url(#a2)"/>
+  <path class="lnd" d="M750,130 L750,175 L240,175 L240,132" marker-end="url(#a2)"/>
+  <text x="495" y="168" text-anchor="middle" class="dim">结果截断后作为 observation 写回 history</text>
+</svg>
+<div class="cap">图 1：一次 Tool Calling = 说明书 → JSON 决策 → 解析 → 白名单派发 → 结果回灌</div>
+</div>
+
+<h2>2. 四个关键点</h2>
+
+<h3>① 说明书（TOOLS_DOC）决定 LLM 会不会用对</h3>
+<p>说明书写在 system prompt 里。每个工具必须写清：<b>用途 / 参数名 / 返回结构 / 易错点</b>。</p>
+<pre>2. get_asset_info
+   参数: {"asset_path": "/Game/xxx/SM_Foo.SM_Foo"}
+   **重要**: 必须是 ObjectPath，末尾要重复资产名     ← 把踩过的坑直接写进说明书</pre>
+
+<h3>② 输出格式：固定一个 JSON 形状</h3>
+<pre>{"thought": "这步想拿什么证据", "tool": "工具名", "args": {...}}</pre>
+<table>
+<tr><th>手段</th><th>代码位置</th><th>作用</th></tr>
+<tr><td><code>"format": "json"</code></td><td><code>llm._post_ollama</code></td><td>让 Ollama 强制输出 JSON</td></tr>
+<tr><td><code>temperature = 0</code></td><td><code>chat_json</code></td><td>决策要稳定，不要发散</td></tr>
+<tr><td><code>num_ctx = 8192</code></td><td><code>_post_ollama</code></td><td>默认 2K 会被工具输出撑爆</td></tr>
+</table>
+
+<h3>③ 解析：宽进严出</h3>
+<div class="diagram">
+<svg width="760" height="150" viewBox="0 0 760 150">
+  <defs><marker id="b2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="box" x="10" y="50" width="140" height="50" rx="8"/><text x="80" y="80" text-anchor="middle">LLM 原始文本</text>
+  <rect class="boxo" x="200" y="20" width="170" height="44" rx="8"/><text x="285" y="47" text-anchor="middle">json.loads 直接解析</text>
+  <rect class="boxo" x="200" y="86" width="170" height="44" rx="8"/><text x="285" y="113" text-anchor="middle">截取首 { 到末 }</text>
+  <rect class="boxr" x="420" y="50" width="150" height="50" rx="8"/><text x="495" y="72" text-anchor="middle">仍失败：追加提示</text><text x="495" y="90" text-anchor="middle" class="dim">「请重新输出纯 JSON」</text>
+  <rect class="boxg" x="610" y="50" width="130" height="50" rx="8"/><text x="675" y="80" text-anchor="middle">dict 决策</text>
+  <path class="ln" d="M150,75 L198,45" marker-end="url(#b2)"/>
+  <path class="ln" d="M285,64 L285,84" marker-end="url(#b2)"/>
+  <path class="ln" d="M370,108 L418,85" marker-end="url(#b2)"/>
+  <path class="ln" d="M570,75 L608,75" marker-end="url(#b2)"/>
+  <path class="ln" d="M370,42 L640,42 L660,48" marker-end="url(#b2)"/>
+</svg>
+<div class="cap">图 2：<code>_extract_json</code> 两级兜底 + <code>chat_json</code> 一次重试</div>
+</div>
+
+<h3>④ 派发：白名单 + 参数矫正</h3>
+<ul>
+<li><b>白名单</b>：<code>_TOOL_MAP</code> 里没有的工具名，直接返回「未知工具」，LLM 编不出新命令。</li>
+<li><b>参数矫正</b>：<code>_normalize_args</code> 把 LLM 常写错的参数名自动改对（<code>directory → path</code>、<code>component_class_name → component_class</code>），省掉一轮白跑。</li>
+</ul>
+
+<div class="note good"><b>经验</b>：LLM 总会犯同一类错 → 与其反复改 prompt，不如在代码层兜住（矫正、白名单、去重）。</div>
+
+<h2>3. 你该记住的 3 件事</h2>
+<ol>
+<li>Tool Calling = 「说明书 + JSON 约定 + Python 派发」，LLM 只负责选。</li>
+<li>输出必须<b>可解析</b>：format=json + 提取 + 一次重试。</li>
+<li>入口要<b>白名单</b>，常见错误在代码层矫正。</li>
+</ol>
+
+<div class="next">下一篇：Agent-3 多 Agent 编排 —— Planner 怎么把任务交给 CodeSage / AssetSage。</div>
+</div>
+</body>
+</html>

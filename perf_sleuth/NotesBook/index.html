@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent 开发笔记 目录</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<div class="wrap">
+<h1>Agent 开发笔记（ue-perf-sleuth）</h1>
+<div class="sub">按「循环 → 工具 → 多 Agent → 引擎 → 代码 → 可靠性」顺序阅读</div>
+
+<div class="diagram">
+<svg width="780" height="150" viewBox="0 0 780 150">
+  <defs><marker id="i1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="10" y="50" width="110" height="50" rx="8"/><text x="65" y="80" text-anchor="middle">1 ReAct</text>
+  <rect class="box" x="145" y="50" width="110" height="50" rx="8"/><text x="200" y="80" text-anchor="middle">2 工具调用</text>
+  <rect class="box" x="280" y="50" width="110" height="50" rx="8"/><text x="335" y="80" text-anchor="middle">3 多 Agent</text>
+  <rect class="boxg" x="415" y="15" width="110" height="50" rx="8"/><text x="470" y="45" text-anchor="middle">4 UnrealMCP</text>
+  <rect class="boxg" x="415" y="85" width="110" height="50" rx="8"/><text x="470" y="115" text-anchor="middle">5 代码索引</text>
+  <rect class="boxo" x="560" y="50" width="130" height="50" rx="8"/><text x="625" y="80" text-anchor="middle">6 可靠性护栏</text>
+  <path class="ln" d="M120,75 L143,75" marker-end="url(#i1)"/><path class="ln" d="M255,75 L278,75" marker-end="url(#i1)"/>
+  <path class="ln" d="M390,65 L413,42" marker-end="url(#i1)"/><path class="ln" d="M390,85 L413,110" marker-end="url(#i1)"/>
+  <path class="ln" d="M525,42 L558,65" marker-end="url(#i1)"/><path class="ln" d="M525,110 L558,85" marker-end="url(#i1)"/>
+</svg>
+<div class="cap">学习路径：4、5 是两条数据源分支，6 是对全局的收口</div>
+</div>
+
+<table>
+<tr><th>#</th><th>主题</th><th>一句话</th><th>对应岗位关键词</th></tr>
+<tr><td>1</td><td><a href="Agent-1-ReAct.md" style="color:#4da3ff">ReAct</a>（md）</td><td>思考 → 行动 → 观察 的循环</td><td>Agent 辅助开发</td></tr>
+<tr><td>2</td><td><a href="Agent-2-ToolCalling.html" style="color:#4da3ff">Tool Calling</a></td><td>LLM 只出 JSON，Python 负责执行</td><td>API / 命令行工具封装</td></tr>
+<tr><td>3</td><td><a href="Agent-3-多Agent编排.html" style="color:#4da3ff">多 Agent 编排</a></td><td>State + route + handoff</td><td>任务拆分、工具复用</td></tr>
+<tr><td>4</td><td><a href="Agent-4-UnrealMCP.html" style="color:#4da3ff">UnrealMCP</a></td><td>TCP 命令协议驱动 UE 编辑器</td><td>原生插件、引擎扩展、运行时控制</td></tr>
+<tr><td>5</td><td><a href="Agent-5-代码索引.html" style="color:#4da3ff">代码索引</a></td><td>197 万符号 + ripgrep 定位</td><td>引擎源码分析、调用关系</td></tr>
+<tr><td>6</td><td><a href="Agent-6-可靠性护栏.html" style="color:#4da3ff">可靠性护栏</a></td><td>每层有兜底，错误变数据</td><td>执行反馈、错误处理、结果验证</td></tr>
+</table>
+</div>
+</body>
+</html>

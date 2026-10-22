@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent-4：UnrealMCP —— Agent 如何控制 UE 编辑器</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<div class="wrap">
+<div class="nav"><a href="index.html">目录</a><a href="Agent-3-多Agent编排.html">上一篇：多 Agent 编排</a><a href="Agent-5-代码索引.html">下一篇：代码索引</a></div>
+<h1>Agent-4：UnrealMCP —— Agent 如何触达 UE 编辑器</h1>
+<div class="sub">对应代码：<code>shared/mcp_client.py</code>、<code>agents/assetsage.py</code>；UE 侧是 <code>RaidGame/Plugins/UnrealMCP</code> 原生插件</div>
+
+<div class="oneline">UnrealMCP = 在 UE 编辑器里开一个 TCP 服务，把引擎能力包成「命令」，Agent 发 JSON 就能查询和操作编辑器。</div>
+
+<h2>1. 三层结构</h2>
+<div class="diagram">
+<svg width="800" height="230" viewBox="0 0 800 230">
+  <defs><marker id="a4" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="boxp" x="10" y="30" width="230" height="170" rx="10"/>
+  <text x="125" y="54" text-anchor="middle">Agent 层（Python）</text>
+  <rect class="box" x="30" y="70" width="190" height="34" rx="6"/><text x="125" y="92" text-anchor="middle">AssetSage（LLM 选工具）</text>
+  <rect class="box" x="30" y="114" width="190" height="34" rx="6"/><text x="125" y="136" text-anchor="middle">_TOOL_MAP 白名单</text>
+  <rect class="box" x="30" y="158" width="190" height="34" rx="6"/><text x="125" y="180" text-anchor="middle">UnrealMCPClient</text>
+  <rect class="boxo" x="285" y="60" width="230" height="110" rx="10"/>
+  <text x="400" y="88" text-anchor="middle">TCP 127.0.0.1:55557</text>
+  <text x="400" y="112" text-anchor="middle" class="dim">请求 {"type": 命令, "params": {...}}</text>
+  <text x="400" y="132" text-anchor="middle" class="dim">响应 一条 JSON（可 1MB+）</text>
+  <text x="400" y="152" text-anchor="middle" class="dim">短连接，一问一答</text>
+  <rect class="boxg" x="560" y="30" width="230" height="170" rx="10"/>
+  <text x="675" y="54" text-anchor="middle">UE 编辑器（C++ 插件）</text>
+  <rect class="box" x="580" y="70" width="190" height="34" rx="6"/><text x="675" y="92" text-anchor="middle">Bridge 收包 + 分发</text>
+  <rect class="box" x="580" y="114" width="190" height="34" rx="6"/><text x="675" y="136" text-anchor="middle">Command Handler × 31</text>
+  <rect class="box" x="580" y="158" width="190" height="34" rx="6"/><text x="675" y="180" text-anchor="middle">引擎 API（资产/Actor）</text>
+  <path class="ln" d="M240,115 L283,115" marker-end="url(#a4)"/>
+  <path class="ln" d="M515,115 L558,115" marker-end="url(#a4)"/>
+  <path class="lnd" d="M558,150 L517,150" marker-end="url(#a4)"/>
+  <path class="lnd" d="M283,150 L242,150" marker-end="url(#a4)"/>
+</svg>
+<div class="cap">图 1：Python Agent 通过 TCP 命令协议驱动 UE 原生插件</div>
+</div>
+
+<h2>2. 为什么是 TCP + JSON 命令，不是直接 Python 脚本</h2>
+<table>
+<tr><th>方案</th><th>问题</th></tr>
+<tr><td>Agent 生成 UE Python 脚本</td><td>任意代码执行，不可控、难验证</td></tr>
+<tr><td><b>命令协议（本项目）</b></td><td>能力边界固定，每个命令有明确参数和返回，可白名单、可测试</td></tr>
+</table>
+
+<h2>3. 客户端的四个设计取舍</h2>
+<ol>
+<li><b>短连接</b>：一次请求一个 socket。服务端是单客户端串行执行，短连接最省心，不用管连接状态。</li>
+<li><b>永不抛异常</b>：连不上 / 超时 / 非法 JSON，一律返回 <code>{"status":"error","error":"..."}</code>。错误变成 observation，让 LLM 自己决定停还是换方向。</li>
+<li><b>边收边判完整</b>：协议没有长度头，所以每收一块就试 <code>json.loads</code>，成功就返回；超时但已有数据也返回，不死等。</li>
+<li><b>先 ping 再干活</b>：<code>client.ping()</code> 探测一次，失败就在 prompt 里警告 LLM「服务不可达，建议直接 finalize」。</li>
+</ol>
+
+<h2>4. 编辑器未启动时（优雅降级）</h2>
+<div class="diagram">
+<svg width="780" height="130" viewBox="0 0 780 130">
+  <defs><marker id="b4" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+  <rect class="box" x="10" y="40" width="120" height="50" rx="8"/><text x="70" y="70" text-anchor="middle">ping</text>
+  <rect class="boxr" x="170" y="40" width="130" height="50" rx="8"/><text x="235" y="62" text-anchor="middle">连接失败</text><text x="235" y="80" text-anchor="middle" class="dim">返回 error dict</text>
+  <rect class="boxo" x="340" y="40" width="150" height="50" rx="8"/><text x="415" y="62" text-anchor="middle">prompt 加警告</text><text x="415" y="80" text-anchor="middle" class="dim">连续 2 次 error 即停</text>
+  <rect class="boxg" x="530" y="40" width="240" height="50" rx="8"/><text x="650" y="62" text-anchor="middle">finalize：说明「UE 未启动」</text><text x="650" y="80" text-anchor="middle" class="dim">Planner 仍可用 CodeSage 证据汇总</text>
+  <path class="ln" d="M130,65 L168,65" marker-end="url(#b4)"/><path class="ln" d="M300,65 L338,65" marker-end="url(#b4)"/><path class="ln" d="M490,65 L528,65" marker-end="url(#b4)"/>
+</svg>
+<div class="cap">图 2：整个系统不会因为 UE 没开而崩溃</div>
+</div>
+
+<h2>5. 读与写</h2>
+<div class="card">
+<ul>
+<li><b>读</b>：<code>get_asset_info</code>（Nanite / LOD / 材质 / 面数）、<code>get_visible_static_mesh_actors</code>、<code>scan_actors_for_component</code>… 用来<b>定位</b>问题。</li>
+<li><b>写</b>：修改编辑器中资产属性来<b>修复</b>问题，走的是同一个 <code>call(command, params)</code> 通道，区别只在命令本身。</li>
+<li><b>闭环</b>：读 → 判断 → 写 → 再读回验证，写完必须回读确认生效。</li>
+</ul>
+</div>
+<div class="note">仓库里 AssetSage 的 <code>_TOOL_MAP</code> 目前只放了 6 个只读命令；写命令的白名单、回读验证请按你实际实现补充到这里。</div>
+
+<h2>6. 你该记住的 3 件事</h2>
+<ol>
+<li>MCP 的本质：<b>把引擎能力变成有边界的命令</b>，Agent 只能在边界内行动。</li>
+<li>客户端要<b>不抛异常、有超时、能判断响应完整</b>，错误当作 observation 还给 LLM。</li>
+<li>修改类能力一定配<b>回读验证</b>，否则「改了」不等于「生效了」。</li>
+</ol>
+
+<div class="next">下一篇：Agent-5 代码索引 —— 197 万符号怎么让 Agent 在大型源码里快速定位。</div>
+</div>
+</body>
+</html>
