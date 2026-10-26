@@ -50,20 +50,83 @@
 </div>
 
 <h2>3. State：Agent 之间的「共享白板」</h2>
+<p>示例输入：<code>"为什么 BMP3 履带碎片一直发 occlusion query"</code>（无强制路由关键词，走 LLM 路由）。
+下面 4 个快照是<b>同一个 State 对象</b>在不同时刻的样子，<b>橙框 = 相对上一张快照被写入的字段</b>。</p>
 <div class="diagram">
-<svg width="700" height="230" viewBox="0 0 700 230">
-  <rect class="box" x="20" y="10" width="660" height="210" rx="10"/>
-  <text x="350" y="34" text-anchor="middle">State（一次会话一个）</text>
-  <rect class="boxo" x="40" y="50" width="190" height="44" rx="6"/><text x="135" y="77" text-anchor="middle">route（谁上场）</text>
-  <rect class="boxo" x="255" y="50" width="190" height="44" rx="6"/><text x="350" y="77" text-anchor="middle">current_handoff（交接单）</text>
-  <rect class="boxo" x="470" y="50" width="190" height="44" rx="6"/><text x="565" y="77" text-anchor="middle">forced_agent（强制路由）</text>
-  <rect class="boxg" x="40" y="110" width="190" height="44" rx="6"/><text x="135" y="137" text-anchor="middle">findings（子 Agent 结论）</text>
-  <rect class="boxg" x="255" y="110" width="190" height="44" rx="6"/><text x="350" y="137" text-anchor="middle">tool_calls（原始证据）</text>
-  <rect class="boxg" x="470" y="110" width="190" height="44" rx="6"/><text x="565" y="137" text-anchor="middle">messages（全程日志）</text>
-  <rect class="boxr" x="40" y="168" width="290" height="40" rx="6"/><text x="185" y="193" text-anchor="middle">error（异常原因）</text>
-  <rect class="boxp" x="370" y="168" width="290" height="40" rx="6"/><text x="515" y="193" text-anchor="middle">final_answer（最终答案）</text>
+<svg width="820" height="1150" viewBox="0 0 820 1150">
+  <defs><marker id="s3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
+
+  <!-- ============ T0 ============ -->
+  <rect class="box" x="10" y="6" width="800" height="240" rx="12"/>
+  <text x="30" y="30" fill="#4da3ff">T0 · graph.py 创建后（会话刚开始）—— 全部是初始值</text>
+  <text x="30" y="58">user_input</text><text x="190" y="58" class="dim">"为什么 BMP3 履带碎片一直发 occlusion query"</text>
+  <text x="30" y="80">route</text><text x="190" y="80" class="dim">"planner"</text>
+  <text x="30" y="102">forced_agent</text><text x="190" y="102" class="dim">None</text>
+  <text x="30" y="124">current_handoff</text><text x="190" y="124" class="dim">None</text>
+  <text x="30" y="146">findings</text><text x="190" y="146" class="dim">[]</text>
+  <text x="30" y="168">tool_calls</text><text x="190" y="168" class="dim">[]</text>
+  <text x="30" y="190">messages</text><text x="190" y="190" class="dim">[Message(role=user, content=原始问题)]</text>
+  <text x="30" y="212">final_answer</text><text x="190" y="212" class="dim">""</text>
+  <text x="30" y="234">error</text><text x="190" y="234" class="dim">""</text>
+
+  <path class="ln" d="M410,246 L410,292" marker-end="url(#s3)"/>
+  <text x="424" y="274" class="dim">planner.run(state)：LLM 决策 → 只写 route 和 current_handoff</text>
+
+  <!-- ============ T1 ============ -->
+  <rect class="box" x="10" y="298" width="800" height="240" rx="12"/>
+  <text x="30" y="322" fill="#4da3ff">T1 · Planner.run() 之后（LLM 选了 handoff_codesage）</text>
+  <text x="30" y="350">user_input</text><text x="190" y="350" class="dim">"为什么 BMP3 履带碎片一直发 occlusion query"（不变）</text>
+  <rect class="boxo" x="20" y="364" width="780" height="22" rx="4"/>
+  <text x="30" y="380">route</text><text x="190" y="380">"codesage"　← Planner 写：下一轮跑 CodeSage</text>
+  <text x="30" y="402">forced_agent</text><text x="190" y="402" class="dim">None（关键词没命中，保持空）</text>
+  <rect class="boxo" x="20" y="408" width="780" height="22" rx="4"/>
+  <text x="30" y="424">current_handoff</text><text x="190" y="424">HandoffRequest(to="codesage", task="查找 occlusion query 相关函数与调用点")　← 新建</text>
+  <text x="30" y="446">findings</text><text x="190" y="446" class="dim">[]（不变）</text>
+  <text x="30" y="468">tool_calls</text><text x="190" y="468" class="dim">[]（不变）</text>
+  <text x="30" y="490">messages</text><text x="190" y="490" class="dim">[user]（不变）</text>
+  <text x="30" y="512">final_answer</text><text x="190" y="512" class="dim">""（不变）</text>
+  <text x="30" y="534">error</text><text x="190" y="534" class="dim">""（不变）</text>
+
+  <path class="ln" d="M410,538 L410,584" marker-end="url(#s3)"/>
+  <text x="424" y="566" class="dim">graph 读 route + handoff → 调 codesage.run(state, handoff)；返回后由 graph 写回结果</text>
+
+  <!-- ============ T2 ============ -->
+  <rect class="box" x="10" y="590" width="800" height="240" rx="12"/>
+  <text x="30" y="614" fill="#4da3ff">T2 · CodeSage.run() 之后（内部 3 步 ReAct，graph 写回）</text>
+  <text x="30" y="642">user_input</text><text x="190" y="642" class="dim">（不变）</text>
+  <rect class="boxo" x="20" y="656" width="780" height="22" rx="4"/>
+  <text x="30" y="672">route</text><text x="190" y="672">"planner"　← graph 写回：交还控制权</text>
+  <text x="30" y="694">forced_agent</text><text x="190" y="694" class="dim">None（不变）</text>
+  <rect class="boxo" x="20" y="700" width="780" height="22" rx="4"/>
+  <text x="30" y="716">current_handoff</text><text x="190" y="716">None　← graph 清空：交接单已用完</text>
+  <rect class="boxo" x="20" y="744" width="780" height="22" rx="4"/>
+  <text x="30" y="760">findings</text><text x="190" y="760">[{summary:"CanBeOccluded 在 ...", key_findings:[...], tool_trace:[...]}]　← graph 追加</text>
+  <rect class="boxo" x="20" y="722" width="780" height="22" rx="4"/>
+  <text x="30" y="738">tool_calls</text><text x="190" y="738">[lookup_symbol("CanBeOccluded")→文件:行号, read_file(...)→源码片段]　← CodeSage 每步调 add_tool_call</text>
+  <rect class="boxo" x="20" y="766" width="780" height="22" rx="4"/>
+  <text x="30" y="782">messages</text><text x="190" y="782">[user, Message(role=codesage, content=summary)]　← graph 追加</text>
+  <text x="30" y="804">final_answer</text><text x="190" y="804" class="dim">""（不变）</text>
+  <text x="30" y="826">error</text><text x="190" y="826" class="dim">""（不变）</text>
+
+  <path class="ln" d="M410,830 L410,876" marker-end="url(#s3)"/>
+  <text x="424" y="858" class="dim">planner.run(state)：开头检查 if state.findings → 非空，走 _summarize（读 findings + tool_calls）</text>
+
+  <!-- ============ T3 ============ -->
+  <rect class="box" x="10" y="882" width="800" height="240" rx="12"/>
+  <text x="30" y="906" fill="#4da3ff">T3 · Planner.run() 汇总之后（最终态）</text>
+  <text x="30" y="934">user_input</text><text x="190" y="934" class="dim">（不变）</text>
+  <rect class="boxo" x="20" y="948" width="780" height="22" rx="4"/>
+  <text x="30" y="964">route</text><text x="190" y="964">"done"　← Planner 写：graph 下一轮看到 done 就 break</text>
+  <text x="30" y="986">forced_agent</text><text x="190" y="986" class="dim">None（不变）</text>
+  <text x="30" y="1008">current_handoff</text><text x="190" y="1008" class="dim">None（不变）</text>
+  <text x="30" y="1030">findings</text><text x="190" y="1030" class="dim">[...同 T2]（不变）</text>
+  <text x="30" y="1052">tool_calls</text><text x="190" y="1052" class="dim">[...同 T2]（不变）</text>
+  <text x="30" y="1074">messages</text><text x="190" y="1074" class="dim">[...同 T2]（不变）</text>
+  <rect class="boxo" x="20" y="1080" width="780" height="22" rx="4"/>
+  <text x="30" y="1096">final_answer</text><text x="190" y="1096">"## 结论 ...（引用 文件:行号，基于 tool_calls 原始证据）"　← Planner 写</text>
+  <text x="30" y="1118">error</text><text x="190" y="1118" class="dim">""（不变）</text>
 </svg>
-<div class="cap">图 2：橙色 = 控制流字段，绿色 = 证据字段，Planner 汇总时同时读 findings 和 tool_calls</div>
+<div class="cap">图 2：State 的 4 个快照。注意两点：① CodeSage 的「history」是它自己的局部变量，不进 State；② 每个字段由固定的人写入（route/handoff/final_answer = Planner，findings/messages = graph，tool_calls = 子 Agent 自己）</div>
 </div>
 <div class="note good"><b>设计点</b>：Planner 汇总时不光看子 Agent 的 <code>summary</code>，还回看 <code>tool_calls</code> 里的原始证据，这样子 Agent 总结错了也能纠正。</div>
 
@@ -73,21 +136,53 @@
 <li><b>LLM 路由</b>：规则没命中，才让 Planner 的 LLM 在 handoff_codesage / handoff_assetsage / finalize 里选；拿不准先派 CodeSage（源码永远可查）。</li>
 </ol>
 
-<h2>5. 一次混合问题怎么走</h2>
+<h2>5. 一次会话实际走几轮：3 轮，只派一个专家</h2>
+<div class="note bad"><b>重要更正</b>：<code>graph.py</code> 文件头的注释和 README 都写了「Planner 可以多轮 handoff，先派 CodeSage 再派 AssetSage 验证」，但<b>当前代码做不到</b>。拦路的是 <code>planner.py</code> 第 109 行：
+<pre>if state.findings:          # 只要 findings 非空
+    return _summarize(...)  # 就直接汇总，route = done</pre>
+也就是说：Planner 一看到有 findings，立刻收尾，不会再 handoff 第二个专家。所以一次会话<b>最多用到一个专家 Agent</b>。</div>
+
 <div class="diagram">
-<svg width="800" height="130" viewBox="0 0 800 130">
+<svg width="820" height="230" viewBox="0 0 820 230">
   <defs><marker id="b3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8fa1b3"/></marker></defs>
-  <rect class="boxp" x="10" y="40" width="130" height="50" rx="8"/><text x="75" y="62" text-anchor="middle">turn 1 Planner</text><text x="75" y="80" text-anchor="middle" class="dim">选 CodeSage</text>
-  <rect class="box" x="170" y="40" width="130" height="50" rx="8"/><text x="235" y="62" text-anchor="middle">turn 2 CodeSage</text><text x="235" y="80" text-anchor="middle" class="dim">查到相关函数</text>
-  <rect class="boxp" x="330" y="40" width="130" height="50" rx="8"/><text x="395" y="62" text-anchor="middle">turn 3 Planner</text><text x="395" y="80" text-anchor="middle" class="dim">再派 AssetSage</text>
-  <rect class="boxg" x="490" y="40" width="130" height="50" rx="8"/><text x="555" y="62" text-anchor="middle">turn 4 AssetSage</text><text x="555" y="80" text-anchor="middle" class="dim">验证资产设置</text>
-  <rect class="boxp" x="650" y="40" width="130" height="50" rx="8"/><text x="715" y="62" text-anchor="middle">turn 5 Planner</text><text x="715" y="80" text-anchor="middle" class="dim">汇总 finalize</text>
-  <path class="ln" d="M140,65 L168,65" marker-end="url(#b3)"/><path class="ln" d="M300,65 L328,65" marker-end="url(#b3)"/>
-  <path class="ln" d="M460,65 L488,65" marker-end="url(#b3)"/><path class="ln" d="M620,65 L648,65" marker-end="url(#b3)"/>
-  <text x="400" y="115" text-anchor="middle" class="dim">总轮数受 planner_max_steps = 6 限制</text>
+  <rect class="boxp" x="10" y="40" width="170" height="60" rx="8"/>
+  <text x="95" y="62" text-anchor="middle">turn 1 · Planner</text>
+  <text x="95" y="80" text-anchor="middle" class="dim">规则 / LLM 决定派谁</text>
+  <text x="95" y="94" text-anchor="middle" class="dim">route = codesage 或 assetsage</text>
+
+  <rect class="box" x="230" y="20" width="170" height="52" rx="8"/>
+  <text x="315" y="42" text-anchor="middle">turn 2a · CodeSage</text><text x="315" y="60" text-anchor="middle" class="dim">查源码，内部多步 ReAct</text>
+  <rect class="boxg" x="230" y="86" width="170" height="52" rx="8"/>
+  <text x="315" y="108" text-anchor="middle">turn 2b · AssetSage</text><text x="315" y="126" text-anchor="middle" class="dim">查编辑器（二选一）</text>
+
+  <rect class="boxp" x="450" y="40" width="170" height="60" rx="8"/>
+  <text x="535" y="62" text-anchor="middle">turn 3 · Planner</text>
+  <text x="535" y="80" text-anchor="middle" class="dim">findings 非空 → 汇总</text>
+  <text x="535" y="94" text-anchor="middle" class="dim">final_answer + route = done</text>
+
+  <rect class="boxo" x="670" y="40" width="140" height="60" rx="8"/>
+  <text x="740" y="62" text-anchor="middle">turn 4 · graph</text>
+  <text x="740" y="80" text-anchor="middle" class="dim">看到 done</text>
+  <text x="740" y="94" text-anchor="middle" class="dim">break 结束</text>
+
+  <path class="ln" d="M180,60 L228,46" marker-end="url(#b3)"/>
+  <path class="ln" d="M180,80 L228,112" marker-end="url(#b3)"/>
+  <path class="ln" d="M400,46 L448,62" marker-end="url(#b3)"/>
+  <path class="ln" d="M400,112 L448,78" marker-end="url(#b3)"/>
+  <path class="ln" d="M620,70 L668,70" marker-end="url(#b3)"/>
+  <text x="440" y="176" text-anchor="middle" class="dim">turn 2 只有一个专家上场：CodeSage 和 AssetSage 不会在同一次会话里都出现</text>
+  <text x="440" y="200" text-anchor="middle" class="dim">（若 Planner 首轮直接 finalize，则只有 turn 1；外层上限 planner_max_steps = 6）</text>
 </svg>
-<div class="cap">图 3：先看代码线索，再用编辑器数据验证，最后汇总</div>
+<div class="cap">图 3（已按真实代码更正）：turn 2 是「二选一」，不是「先代码再资产」</div>
 </div>
+
+<h4>想让两个专家合作，要改什么</h4>
+<ol>
+<li><b>改 <code>planner.run</code> 的入口判断</b>：把 <code>if state.findings: return _summarize(...)</code> 去掉，改成每次都让 LLM 在「继续 handoff / finalize」之间选。</li>
+<li><b>汇总 prompt 要带上选项</b>：<code>_summarize</code> 目前只要求输出 <code>finalize</code>，需要新增「再派 AssetSage」这类动作。</li>
+<li><b>graph 层要认新 route</b>：目前 <code>route</code> 回到 <code>planner</code> 后，下一轮由 Planner 决定；只要 Planner 能再写 <code>route="assetsage"</code>，graph 已经支持，不用改。</li>
+</ol>
+<div class="note good"><b>好消息</b>：改动集中在 <code>planner.py</code> 一处。<code>graph.py</code> 的 while 循环本来就是为多轮设计的，只差 Planner 不再「见好就收」。</div>
 
 <h2>6. 你该记住的 3 件事</h2>
 <ol>
